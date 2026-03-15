@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -102,6 +103,38 @@ func (c *Client) GetCurrentUser() (*User, error) {
 
 // --- Repository ---
 
+type AccessLevel int
+
+func (a *AccessLevel) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*a = 0
+		return nil
+	}
+
+	var numeric int
+	if err := json.Unmarshal(data, &numeric); err == nil {
+		*a = AccessLevel(numeric)
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return fmt.Errorf("解析 accessLevel 失败: %w", err)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		*a = 0
+		return nil
+	}
+
+	numeric, err := strconv.Atoi(text)
+	if err != nil {
+		return fmt.Errorf("解析 accessLevel 失败: %w", err)
+	}
+	*a = AccessLevel(numeric)
+	return nil
+}
+
 type Repository struct {
 	ID                int    `json:"id"`
 	Name              string `json:"name"`
@@ -114,7 +147,7 @@ type Repository struct {
 	CreatedAt         string `json:"createdAt"`
 	LastActivityAt    string `json:"lastActivityAt"`
 	StarCount         int    `json:"starCount"`
-	AccessLevel       int    `json:"accessLevel"`
+	AccessLevel       AccessLevel `json:"accessLevel"`
 }
 
 type RepositoryDetail struct {
@@ -135,7 +168,7 @@ type RepositoryDetail struct {
 	LastActivityAt    string `json:"lastActivityAt"`
 	StarCount         int    `json:"starCount"`
 	ForkCount         int    `json:"forkCount"`
-	AccessLevel       int    `json:"accessLevel"`
+	AccessLevel       AccessLevel `json:"accessLevel"`
 	AllowPush         bool   `json:"allowPush"`
 }
 
