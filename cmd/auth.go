@@ -36,9 +36,15 @@ var authStatusCmd = &cobra.Command{
 	RunE:  runAuthStatus,
 }
 
+var authTokenCmd = &cobra.Command{
+	Use:   "token",
+	Short: "输出当前存储的令牌",
+	RunE:  runAuthToken,
+}
+
 func init() {
 	rootCmd.AddCommand(authCmd)
-	authCmd.AddCommand(authLoginCmd, authLogoutCmd, authStatusCmd)
+	authCmd.AddCommand(authLoginCmd, authLogoutCmd, authStatusCmd, authTokenCmd)
 }
 
 func prompt(reader *bufio.Reader, label, defaultVal string) string {
@@ -203,5 +209,17 @@ func runAuthStatus(cmd *cobra.Command, args []string) error {
 	if user.Email != "" {
 		fmt.Printf("邮箱:     %s\n", user.Email)
 	}
+	return nil
+}
+
+func runAuthToken(cmd *cobra.Command, args []string) error {
+	token, _, err := config.ResolveToken(GlobalCfgFile)
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		return fmt.Errorf("未认证，请先运行: cuctl auth login")
+	}
+	fmt.Println(token)
 	return nil
 }

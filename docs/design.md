@@ -2,27 +2,17 @@
 
 ## 1. 目标与范围
 
-### 1.0 当前实现状态
-
-本设计文档描述的是 `Codeup Control` 的整体设计目标与后续规划，不等同于当前版本已完整实现的功能集合。
-
-当前代码中已经可用的核心能力主要包括：
-
-- 认证：`cuctl auth login`、`logout`、`status`
-- 仓库：`cuctl repo list`、`clone`、`view`、`set-default`
-- 合并请求：`cuctl pr list`、`create`、`view`、`close`、`status`
-
-其余命令仍可能处于占位或待实现状态。面向最终用户的当前可用命令，请以 `README.md` 为准。
-
 ### 1.1 目标
 
-仿照 GitHub 的 `gh` CLI，为阿里云效 Codeup 提供命令行工具，使在身份认证后可在终端完成：
+为阿里云效 Codeup 提供命令行工具，使在身份认证后可在终端完成代码库、合并请求、分支的全生命周期管理。
 
-- 代码库：列表、克隆、查看
-- 合并请求（MR/PR）：创建、列表、查看、合并
-- 后续可扩展：分支、评审、Issue 等
+### 1.2 设计原则
 
-### 1.2 非目标（当前版本）
+1. **与 GitHub CLI (`gh`) 使用方法兼容**：命令层级（`auth`/`repo`/`pr`）、子命令名称（`list`/`create`/`view`/`edit`/`merge`/`checkout`/`diff`/`close`/`reopen`/`ready` 等）、flag 命名（`-R/--repo`、`-t/--title`、`-b/--body`、`-B/--base`、`-d/--delete-branch` 等）、交互行为（省略 PR 编号时自动关联当前 git 分支）均对齐 `gh`。用户从 `gh` 迁移到 `cuctl` 时零学习成本。
+2. **Codeup 特有能力可扩展**：对于 `gh` 未覆盖但云效提供 API 的能力（如 `branch` 命令组），以同样的风格新增命令，不破坏整体一致性。
+3. **单二进制、零依赖运行**：Go 编译为单一二进制文件，可直接复制到目标机器使用。
+
+### 1.3 非目标（当前版本）
 
 - 不做代码迁移（迁移场景使用官方 Codeup-CLI）
 - 不实现 Web 控制台的全部功能，仅覆盖常用开发流程
@@ -50,15 +40,14 @@ codeup-control/
 ├── .gitignore              # 忽略构建产物
 ├── cmd/
 │   ├── root.go             # 根命令、全局 flag（--config, --debug）、--version
-│   ├── helpers.go          # 公共辅助（loadClientFromConfig 等）
-│   ├── auth.go             # cuctl auth login/logout/status
-│   ├── repo.go             # cuctl repo list/clone/view/set-default/create
-│   ├── pr.go               # cuctl pr list/create/view/merge/checkout/diff/close/status/review/comment
-│   └── branch.go           # cuctl branch list/create/delete/view/protect
+│   ├── helpers.go          # 公共辅助（loadClientFromConfig、resolveRepoRef 等）
+│   ├── auth.go             # cuctl auth login/logout/status/token
+│   ├── repo.go             # cuctl repo list/clone/view/create/edit/delete/fork/archive/unarchive/rename/set-default
+│   ├── pr.go               # cuctl pr list/create/view/edit/merge/checkout/diff/close/reopen/ready/status/review/comment
+│   └── branch.go           # cuctl branch list/create/delete
 ├── internal/
 │   ├── client/             # 云效 API 客户端（HTTP + PAT）
-│   ├── config/             # 配置与凭证读写（PAT 存储位置、环境变量）
-│   └── codeup/             # API 模型与端点封装（按需）
+│   └── config/             # 配置与凭证读写（PAT 存储位置、环境变量）
 └── docs/
     └── design.md           # 本设计文档
 ```
@@ -107,53 +96,60 @@ cuctl [--config PATH] [--debug] <command> [args]
 
 ### 5.2 auth（认证）
 
-| 子命令        | 说明 |
-|---------------|------|
-| `cuctl auth login`  | 引导配置 PAT（写入配置/凭证）；若未来支持 OAuth 则走设备码流程 |
+| 子命令 | 说明 |
+|--------|------|
+| `cuctl auth login` | 引导配置 PAT（写入配置/凭证）；若未来支持 OAuth 则走设备码流程 |
 | `cuctl auth logout` | 清除本地存储的 token，不撤销云效侧 PAT |
-| `cuctl auth status` | 显示当前使用的认证来源（env/credentials）及是否有效（可调一个只读 API 校验） |
+| `cuctl auth status` | 显示当前使用的认证来源（env/credentials）及是否有效（调只读 API 校验） |
+| `cuctl auth token` | 输出当前令牌到 stdout，便于脚本使用（对齐 `gh auth token`） |
 
 ### 5.3 repo（代码库）
 
-| 子命令           | 优先级 | 说明 | 云效 API |
-|------------------|:---:|------|----------|
-| `cuctl repo list`   | P0 | 列出当前用户有权限的代码库 | ListRepositories |
-| `cuctl repo clone [<org>/]<repo>` | P0 | 克隆指定仓库（API 取 URL + git clone） | GetRepository |
-| `cuctl repo view [<org>/]<repo>`  | P0 | 显示仓库概要（默认分支、可见性、URL 等） | GetRepository |
-| `cuctl repo set-default`  | P1 | 设置当前默认仓库（写入本地配置，后续命令可省略 org/repo） | 纯本地 |
-| `cuctl repo create`  | P2 | 创建新仓库 | CreateRepository |
+| 子命令 | 说明 | 云效 API |
+|--------|------|----------|
+| `cuctl repo list` | 列出当前用户有权限的代码库 | ListRepositories |
+| `cuctl repo clone [<org>/]<repo>` | 克隆指定仓库（API 取 URL + git clone） | GetRepository |
+| `cuctl repo view [<org>/]<repo>` | 显示仓库概要（默认分支、可见性、URL 等） | GetRepository |
+| `cuctl repo create <name>` | 创建新仓库 | CreateRepository |
+| `cuctl repo edit [<org>/]<repo>` | 编辑仓库设置（描述、可见性、默认分支） | UpdateRepository |
+| `cuctl repo delete [<org>/]<repo>` | 删除仓库（需输入仓库名确认，或 `--yes`） | DeleteRepository |
+| `cuctl repo fork [<org>/]<repo>` | Fork 仓库 | ForkRepository |
+| `cuctl repo archive [<org>/]<repo>` | 归档仓库 | ArchiveRepository |
+| `cuctl repo unarchive [<org>/]<repo>` | 取消归档 | UnarchiveRepository |
+| `cuctl repo rename <new-name>` | 重命名仓库（通过 `-R` 指定目标仓库） | UpdateRepository |
+| `cuctl repo set-default` | 设置当前默认仓库（纯本地，后续命令可省略 org/repo） | — |
 
 - 仓库标识：支持 `org/repo` 或仅 `repo`（用默认 org，来自配置或 `set-default`）。
 
 ### 5.4 pr（合并请求）
 
-| 子命令           | 优先级 | 说明 | 云效 API |
-|------------------|:---:|------|----------|
-| `cuctl pr list`      | P0 | 列出当前仓库或指定仓库的 MR | ListChangeRequests |
-| `cuctl pr create`    | P0 | 基于当前分支创建 MR（需目标分支、标题等） | CreateChangeRequest |
-| `cuctl pr view [n]`  | P0 | 查看指定 MR 详情 | GetChangeRequest |
-| `cuctl pr merge [n]` | P0 | 合并指定 MR | MergeMergeRequest |
-| `cuctl pr checkout [n]` | P0 | 切到 MR 对应的源分支（取源分支名 + git fetch/checkout） | GetChangeRequest |
-| `cuctl pr diff [n]`  | P0 | 查看 MR 的代码变更 | GetCompare / MR diff 数据 |
-| `cuctl pr close [n]` | P0 | 关闭 MR | CloseChangeRequest |
-| `cuctl pr status`    | P0 | 显示当前分支关联的 MR 状态 | ListChangeRequests（按分支过滤） |
-| `cuctl pr review [n]` | P1 | 提交评审（通过 PASS / 拒绝 NOT_PASS） | ReviewChangeRequest |
-| `cuctl pr comment [n]` | P1 | 添加评论（全局或行内） | CreateChangeRequestComment |
-| `cuctl pr edit [n]`  | P2 | 编辑 MR 标题/描述/评审人 | 待确认 |
-| `cuctl pr ready [n]` | P2 | 标记草稿 MR 为就绪 | 待确认 |
-| `cuctl pr reopen [n]` | P2 | 重新打开已关闭的 MR | 待确认 |
+| 子命令 | 说明 | 云效 API |
+|--------|------|----------|
+| `cuctl pr list` | 列出当前仓库或指定仓库的 MR | ListChangeRequests |
+| `cuctl pr create` | 基于当前分支创建 MR（需目标分支、标题等） | CreateChangeRequest |
+| `cuctl pr view [n]` | 查看指定 MR 详情 | GetChangeRequest |
+| `cuctl pr edit [n]` | 编辑 MR 标题/描述 | UpdateChangeRequest |
+| `cuctl pr merge [n]` | 合并指定 MR | MergeChangeRequest |
+| `cuctl pr checkout <n>` | 切到 MR 对应的源分支（git fetch + checkout） | GetChangeRequest |
+| `cuctl pr diff [n]` | 查看 MR 的代码变更（通过本地 git diff） | GetChangeRequest |
+| `cuctl pr close <n>` | 关闭 MR | CloseChangeRequest |
+| `cuctl pr reopen <n>` | 重新打开已关闭的 MR | ReopenChangeRequest |
+| `cuctl pr ready [n]` | 标记草稿/WIP MR 为就绪 | UpdateChangeRequest |
+| `cuctl pr status` | 显示当前分支关联的 MR 状态 | ListChangeRequests（按分支过滤） |
+| `cuctl pr review <n>` | 提交评审（`--approve` 通过 / `--reject` 拒绝） | ReviewChangeRequest |
+| `cuctl pr comment <n>` | 添加评论 | CommentChangeRequest |
+
+- 省略 `[n]` 的命令自动关联当前 git 分支对应的打开中 MR，与 `gh` 行为一致。
 
 ### 5.5 branch（分支）
 
-gh 没有独立的 `branch` 命令组，但云效有完整的分支 API，且分支操作在日常开发中高频使用，因此 Codeup Control 新增此命令组。
+`gh` 没有独立的 `branch` 命令组，但云效有完整的分支 API，且分支操作在日常开发中高频使用，因此 Codeup Control 新增此命令组。
 
-| 子命令           | 优先级 | 说明 | 云效 API |
-|------------------|:---:|------|----------|
-| `cuctl branch list`   | P1 | 列出仓库分支 | ListBranches |
-| `cuctl branch create <name> [--from ref]` | P1 | 创建分支（可指定来源分支/tag/commit） | CreateBranch |
-| `cuctl branch delete <name>` | P1 | 删除分支 | DeleteBranch |
-| `cuctl branch view <name>` | P2 | 查看分支详情（最新 commit、是否受保护等） | GetBranchInfo |
-| `cuctl branch protect <name>` | P2 | 查看/设置保护规则 | CreateProtectedBranch / DeleteProtectedBranch |
+| 子命令 | 说明 | 云效 API |
+|--------|------|----------|
+| `cuctl branch list` | 列出仓库分支 | ListBranches |
+| `cuctl branch create <name> [--from ref]` | 创建分支（可指定来源分支/tag/commit） | CreateBranch |
+| `cuctl branch delete <name>` | 删除分支 | DeleteBranch |
 
 ---
 
@@ -171,15 +167,21 @@ gh 没有独立的 `branch` 命令组，但云效有完整的分支 API，且分
 | 仓库 | 列表 | GET | `/organizations/{orgId}/repositories` |
 | 仓库 | 详情 | GET | `/organizations/{orgId}/repositories/{repoId}` |
 | 仓库 | 创建 | POST | `/organizations/{orgId}/repositories` |
-| 分支 | 列表 | GET | `/organizations/repositories/{repoId}/branches` |
-| 分支 | 详情 | GET | `/organizations/repositories/{repoId}/branches/{name}` |
+| 仓库 | 更新 | PUT | `/organizations/{orgId}/repositories/{repoId}` |
+| 仓库 | 删除 | DELETE | `/organizations/{orgId}/repositories/{repoId}` |
+| 仓库 | Fork | POST | `/organizations/{orgId}/repositories/{repoId}/fork` |
+| 仓库 | 归档 | POST | `/organizations/{orgId}/repositories/{repoId}/archive` |
+| 仓库 | 取消归档 | POST | `/organizations/{orgId}/repositories/{repoId}/unarchive` |
+| 分支 | 列表 | GET | `/organizations/{orgId}/repositories/{repoId}/branches` |
 | 分支 | 创建 | POST | `/organizations/{orgId}/repositories/{repoId}/branches` |
 | 分支 | 删除 | DELETE | `/organizations/{orgId}/repositories/{repoId}/branches/{name}` |
 | 合并请求 | 列表 | GET | `/organizations/{orgId}/changeRequests` |
 | 合并请求 | 创建 | POST | `/organizations/{orgId}/repositories/{repoId}/changeRequests` |
 | 合并请求 | 详情 | GET | `/organizations/{orgId}/repositories/{repoId}/changeRequests/{id}` |
-| 合并请求 | 合并 | PUT/POST | MergeMergeRequest |
-| 合并请求 | 关闭 | PUT/POST | CloseChangeRequest |
+| 合并请求 | 更新 | PUT | `/organizations/{orgId}/repositories/{repoId}/changeRequests/{id}` |
+| 合并请求 | 合并 | POST | `/…/changeRequests/{id}/merge` |
+| 合并请求 | 关闭 | POST | `/…/changeRequests/{id}/close` |
+| 合并请求 | 重新打开 | POST | `/…/changeRequests/{id}/reopen` |
 | 合并请求 | 评审 | POST | `/…/changeRequests/{id}/review` |
 | 合并请求 | 评论 | POST | `/…/changeRequests/{id}/comments` |
 
@@ -195,15 +197,14 @@ gh 没有独立的 `branch` 命令组，但云效有完整的分支 API，且分
 
 ---
 
-## 8. 版本与迭代
+## 8. 后续规划
 
-- **v0.1**：认证（`auth login/logout/status`）+ `repo list`。
-- **v0.2**：`repo clone`、`repo view`、`repo set-default`。
-- **v0.3**：`pr list`、`pr create`、`pr view`、`pr merge`。
-- **v0.4**：`pr checkout`、`pr diff`、`pr close`、`pr status`。
-- **v0.5**：`pr review`、`pr comment`、`branch list/create/delete`。
-- **v0.6**：`repo create`、`branch view/protect`、`pr edit/ready/reopen`。
-- 后续：OAuth / 飞连（若云效支持）、与云效 Flow（CI/CD）集成等。
+当前所有设计命令均已实现。后续可考虑：
+
+- OAuth / 飞连（若云效支持设备流或 IdP 集成）
+- 与云效 Flow（CI/CD）集成
+- `branch view`（查看分支详情）、`branch protect`（保护规则管理）
+- `pr checks`（查看流水线状态，若 Codeup 提供对应 API）
 
 ---
 
@@ -211,4 +212,4 @@ gh 没有独立的 `branch` 命令组，但云效有完整的分支 API，且分
 
 - 云效 Codeup OpenAPI：阿里云 OpenAPI 门户 codeup 2020-04-14。
 - 个人访问令牌：云效帮助中心「个人访问令牌」「如何使用个人访问令牌调用 API」。
-- GitHub CLI (gh)：命令与交互风格参考。
+- GitHub CLI (gh)：命令结构与交互风格的对标参考。

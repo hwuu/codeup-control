@@ -356,3 +356,249 @@ func (c *Client) CloseChangeRequest(orgID, repoIDOrPath string, localID int) err
 	}
 	return nil
 }
+
+// --- Update ---
+
+type UpdateChangeRequestInput struct {
+	Title          string `json:"title,omitempty"`
+	Description    string `json:"description,omitempty"`
+	WorkInProgress *bool  `json:"workInProgress,omitempty"`
+}
+
+func (c *Client) UpdateChangeRequest(orgID, repoIDOrPath string, localID int, input UpdateChangeRequestInput) (*ChangeRequest, error) {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/changeRequests/%d",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), localID)
+	data, err := c.doRequest("PUT", path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	var pr ChangeRequest
+	if err := json.Unmarshal(data, &pr); err != nil {
+		return nil, fmt.Errorf("解析更新结果失败: %w", err)
+	}
+	return &pr, nil
+}
+
+// --- Merge ---
+
+type MergeChangeRequestInput struct {
+	MergeType          string `json:"mergeType,omitempty"`
+	DeleteSourceBranch bool   `json:"deleteSourceBranch,omitempty"`
+	Message            string `json:"message,omitempty"`
+}
+
+func (c *Client) MergeChangeRequest(orgID, repoIDOrPath string, localID int, input MergeChangeRequestInput) error {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/changeRequests/%d/merge",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), localID)
+	_, err = c.doRequest("POST", path, bytes.NewReader(reqBody))
+	return err
+}
+
+// --- Review ---
+
+type ReviewChangeRequestInput struct {
+	ReviewOpinion string `json:"reviewOpinion"`
+}
+
+func (c *Client) ReviewChangeRequest(orgID, repoIDOrPath string, localID int, input ReviewChangeRequestInput) error {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/changeRequests/%d/review",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), localID)
+	_, err = c.doRequest("POST", path, bytes.NewReader(reqBody))
+	return err
+}
+
+// --- Comment ---
+
+type CommentChangeRequestInput struct {
+	Content string `json:"content"`
+}
+
+func (c *Client) CommentChangeRequest(orgID, repoIDOrPath string, localID int, input CommentChangeRequestInput) error {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/changeRequests/%d/comments",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), localID)
+	_, err = c.doRequest("POST", path, bytes.NewReader(reqBody))
+	return err
+}
+
+// --- Reopen ---
+
+func (c *Client) ReopenChangeRequest(orgID, repoIDOrPath string, localID int) error {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/changeRequests/%d/reopen",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), localID)
+	_, err := c.doRequest("POST", path, nil)
+	return err
+}
+
+// --- Branch ---
+
+type BranchCommit struct {
+	ID        string `json:"id"`
+	ShortID   string `json:"shortId"`
+	Title     string `json:"title"`
+	Author    string `json:"authorName"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type Branch struct {
+	Name      string       `json:"name"`
+	Protected bool         `json:"protected"`
+	Commit    BranchCommit `json:"commit"`
+}
+
+type CreateBranchInput struct {
+	BranchName string `json:"branchName"`
+	Ref        string `json:"ref"`
+}
+
+func (c *Client) ListBranches(orgID, repoIDOrPath string, page, perPage int, search string) ([]Branch, error) {
+	values := url.Values{}
+	values.Set("page", fmt.Sprintf("%d", page))
+	values.Set("perPage", fmt.Sprintf("%d", perPage))
+	if search != "" {
+		values.Set("search", search)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/branches?%s",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), values.Encode())
+
+	data, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var branches []Branch
+	if err := json.Unmarshal(data, &branches); err != nil {
+		return nil, fmt.Errorf("解析分支列表失败: %w", err)
+	}
+	return branches, nil
+}
+
+func (c *Client) CreateBranch(orgID, repoIDOrPath string, input CreateBranchInput) (*Branch, error) {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/branches",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+
+	data, err := c.doRequest("POST", path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	var branch Branch
+	if err := json.Unmarshal(data, &branch); err != nil {
+		return nil, fmt.Errorf("解析分支信息失败: %w", err)
+	}
+	return &branch, nil
+}
+
+func (c *Client) DeleteBranch(orgID, repoIDOrPath, branchName string) error {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/branches/%s",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)), url.PathEscape(branchName))
+	_, err := c.doRequest("DELETE", path, nil)
+	return err
+}
+
+// --- Repository Create ---
+
+type CreateRepositoryInput struct {
+	Name          string `json:"name"`
+	NamespacePath string `json:"namespacePath,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
+	InitReadme    bool   `json:"initReadme,omitempty"`
+}
+
+func (c *Client) CreateRepository(orgID string, input CreateRepositoryInput) (*RepositoryDetail, error) {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories", orgID)
+
+	data, err := c.doRequest("POST", path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	var repo RepositoryDetail
+	if err := json.Unmarshal(data, &repo); err != nil {
+		return nil, fmt.Errorf("解析创建结果失败: %w", err)
+	}
+	return &repo, nil
+}
+
+// --- Repository Update/Delete/Fork/Archive ---
+
+type UpdateRepositoryInput struct {
+	Name          string `json:"name,omitempty"`
+	Description   string `json:"description,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+}
+
+func (c *Client) UpdateRepository(orgID, repoIDOrPath string, input UpdateRepositoryInput) (*RepositoryDetail, error) {
+	reqBody, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+	data, err := c.doRequest("PUT", path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	var repo RepositoryDetail
+	if err := json.Unmarshal(data, &repo); err != nil {
+		return nil, fmt.Errorf("解析更新结果失败: %w", err)
+	}
+	return &repo, nil
+}
+
+func (c *Client) DeleteRepository(orgID, repoIDOrPath string) error {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+	_, err := c.doRequest("DELETE", path, nil)
+	return err
+}
+
+func (c *Client) ForkRepository(orgID, repoIDOrPath string) (*RepositoryDetail, error) {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/fork",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+	data, err := c.doRequest("POST", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var repo RepositoryDetail
+	if err := json.Unmarshal(data, &repo); err != nil {
+		return nil, fmt.Errorf("解析 fork 结果失败: %w", err)
+	}
+	return &repo, nil
+}
+
+func (c *Client) ArchiveRepository(orgID, repoIDOrPath string) error {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/archive",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+	_, err := c.doRequest("POST", path, nil)
+	return err
+}
+
+func (c *Client) UnarchiveRepository(orgID, repoIDOrPath string) error {
+	path := fmt.Sprintf("/codeup/organizations/%s/repositories/%s/unarchive",
+		orgID, url.PathEscape(strings.TrimSpace(repoIDOrPath)))
+	_, err := c.doRequest("POST", path, nil)
+	return err
+}

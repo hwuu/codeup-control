@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/hwuu/codeup-control/internal/client"
+	"github.com/hwuu/codeup-control/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,17 @@ var (
 	prCreateBody  string
 	prCreateBase  string
 	prCreateHead  string
+)
+
+var (
+	prMergeType         string
+	prMergeDeleteBranch bool
+	prMergeMessage      string
+	prReviewApprove     bool
+	prReviewReject      bool
+	prCommentBody       string
+	prEditTitle         string
+	prEditBody          string
 )
 
 // P0
@@ -55,30 +67,21 @@ var prMergeCmd = &cobra.Command{
 	Use:   "merge [<number>]",
 	Short: "执行合并",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("pr merge: 待实现")
-		return nil
-	},
+	RunE:  runPRMerge,
 }
 
 var prCheckoutCmd = &cobra.Command{
 	Use:   "checkout <number>",
 	Short: "切换到合并请求对应的分支",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("pr checkout: 待实现")
-		return nil
-	},
+	RunE:  runPRCheckout,
 }
 
 var prDiffCmd = &cobra.Command{
 	Use:   "diff [<number>]",
 	Short: "查看合并请求的代码变更",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("pr diff: 待实现")
-		return nil
-	},
+	RunE:  runPRDiff,
 }
 
 var prCloseCmd = &cobra.Command{
@@ -100,20 +103,37 @@ var prReviewCmd = &cobra.Command{
 	Use:   "review <number>",
 	Short: "提交评审（通过或拒绝）",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("pr review: 待实现")
-		return nil
-	},
+	RunE:  runPRReview,
 }
 
 var prCommentCmd = &cobra.Command{
 	Use:   "comment <number>",
 	Short: "添加评论",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("pr comment: 待实现")
-		return nil
-	},
+	RunE:  runPRComment,
+}
+
+// P2
+
+var prEditCmd = &cobra.Command{
+	Use:   "edit [<number>]",
+	Short: "编辑合并请求的标题或描述",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runPREdit,
+}
+
+var prReadyCmd = &cobra.Command{
+	Use:   "ready [<number>]",
+	Short: "标记合并请求为就绪（取消草稿/WIP）",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runPRReady,
+}
+
+var prReopenCmd = &cobra.Command{
+	Use:   "reopen <number>",
+	Short: "重新打开已关闭的合并请求",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runPRReopen,
 }
 
 func init() {
@@ -121,10 +141,11 @@ func init() {
 	prCmd.AddCommand(
 		prListCmd, prCreateCmd, prViewCmd, prMergeCmd,
 		prCheckoutCmd, prDiffCmd, prCloseCmd, prStatusCmd,
-		prReviewCmd, prCommentCmd,
+		prReviewCmd, prCommentCmd, prEditCmd,
+		prReadyCmd, prReopenCmd,
 	)
 
-	prCmd.PersistentFlags().StringVar(&prRepo, "repo", "", "指定仓库，格式为 <org>/<repo>")
+	prCmd.PersistentFlags().StringVarP(&prRepo, "repo", "R", "", "指定仓库，格式为 <org>/<repo>")
 
 	prListCmd.Flags().IntVarP(&prListPage, "page", "p", 1, "页码")
 	prListCmd.Flags().IntVarP(&prListPerPage, "limit", "l", 20, "每页数量 (1-100)")
@@ -133,8 +154,20 @@ func init() {
 
 	prCreateCmd.Flags().StringVarP(&prCreateTitle, "title", "t", "", "合并请求标题")
 	prCreateCmd.Flags().StringVarP(&prCreateBody, "body", "b", "", "合并请求描述")
-	prCreateCmd.Flags().StringVar(&prCreateBase, "base", "", "目标分支，默认仓库默认分支")
+	prCreateCmd.Flags().StringVarP(&prCreateBase, "base", "B", "", "目标分支，默认仓库默认分支")
 	prCreateCmd.Flags().StringVar(&prCreateHead, "head", "", "源分支，默认当前 git 分支")
+
+	prMergeCmd.Flags().StringVar(&prMergeType, "type", "", "合并类型，如 merge-commit, squash 等")
+	prMergeCmd.Flags().BoolVarP(&prMergeDeleteBranch, "delete-branch", "d", false, "合并后删除源分支")
+	prMergeCmd.Flags().StringVarP(&prMergeMessage, "message", "m", "", "合并提交信息")
+
+	prReviewCmd.Flags().BoolVar(&prReviewApprove, "approve", false, "通过评审")
+	prReviewCmd.Flags().BoolVar(&prReviewReject, "reject", false, "拒绝评审")
+
+	prCommentCmd.Flags().StringVarP(&prCommentBody, "body", "b", "", "评论内容")
+
+	prEditCmd.Flags().StringVarP(&prEditTitle, "title", "t", "", "新标题")
+	prEditCmd.Flags().StringVarP(&prEditBody, "body", "b", "", "新描述")
 }
 
 func runPRList(cmd *cobra.Command, args []string) error {
@@ -383,6 +416,326 @@ func runPRStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 	return nil
+}
+
+func runPRMerge(cmd *cobra.Command, args []string) error {
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := resolvePRNumber(c, cfg, prRepo, args)
+	if err != nil {
+		return err
+	}
+
+	if err := c.MergeChangeRequest(cfg.OrganizationID, repoRef, localID, client.MergeChangeRequestInput{
+		MergeType:          prMergeType,
+		DeleteSourceBranch: prMergeDeleteBranch,
+		Message:            prMergeMessage,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("已合并合并请求 #%d\n", localID)
+	if prMergeDeleteBranch {
+		fmt.Println("源分支已标记删除。")
+	}
+	return nil
+}
+
+func runPRCheckout(cmd *cobra.Command, args []string) error {
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("合并请求编号必须是整数: %s", args[0])
+	}
+
+	pr, err := c.GetChangeRequest(cfg.OrganizationID, repoRef, localID)
+	if err != nil {
+		return err
+	}
+
+	sourceBranch := pr.SourceBranch
+	if sourceBranch == "" {
+		return fmt.Errorf("合并请求 #%d 没有源分支信息", localID)
+	}
+
+	fetchCmd := exec.Command("git", "fetch", "origin", sourceBranch)
+	fetchCmd.Stdout = os.Stdout
+	fetchCmd.Stderr = os.Stderr
+	if err := fetchCmd.Run(); err != nil {
+		return fmt.Errorf("git fetch 失败: %w", err)
+	}
+
+	checkoutCmd := exec.Command("git", "checkout", sourceBranch)
+	checkoutCmd.Stdout = os.Stdout
+	checkoutCmd.Stderr = os.Stderr
+	if err := checkoutCmd.Run(); err != nil {
+		createCmd := exec.Command("git", "checkout", "-b", sourceBranch, "origin/"+sourceBranch)
+		createCmd.Stdout = os.Stdout
+		createCmd.Stderr = os.Stderr
+		if err := createCmd.Run(); err != nil {
+			return fmt.Errorf("git checkout 失败: %w", err)
+		}
+	}
+
+	fmt.Printf("已切换到合并请求 #%d 的分支: %s\n", localID, sourceBranch)
+	return nil
+}
+
+func runPRDiff(cmd *cobra.Command, args []string) error {
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := resolvePRNumber(c, cfg, prRepo, args)
+	if err != nil {
+		return err
+	}
+
+	pr, err := c.GetChangeRequest(cfg.OrganizationID, repoRef, localID)
+	if err != nil {
+		return err
+	}
+
+	if err := exec.Command("git", "rev-parse", "--git-dir").Run(); err != nil {
+		fmt.Printf("合并请求 #%d: %s -> %s\n", pr.LocalID, pr.SourceBranch, pr.TargetBranch)
+		return fmt.Errorf("当前目录不是 git 仓库，无法显示 diff；请在仓库克隆目录下执行此命令")
+	}
+
+	fetchCmd := exec.Command("git", "fetch", "origin", pr.SourceBranch, pr.TargetBranch)
+	fetchCmd.Stderr = os.Stderr
+	if err := fetchCmd.Run(); err != nil {
+		return fmt.Errorf("git fetch 失败: %w", err)
+	}
+
+	diffCmd := exec.Command("git", "diff",
+		fmt.Sprintf("origin/%s...origin/%s", pr.TargetBranch, pr.SourceBranch))
+	diffCmd.Stdout = os.Stdout
+	diffCmd.Stderr = os.Stderr
+	return diffCmd.Run()
+}
+
+func runPRReview(cmd *cobra.Command, args []string) error {
+	if !prReviewApprove && !prReviewReject {
+		return fmt.Errorf("请指定 --approve 或 --reject")
+	}
+	if prReviewApprove && prReviewReject {
+		return fmt.Errorf("--approve 和 --reject 不能同时使用")
+	}
+
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("合并请求编号必须是整数: %s", args[0])
+	}
+
+	opinion := "PASS"
+	if prReviewReject {
+		opinion = "NOT_PASS"
+	}
+
+	if err := c.ReviewChangeRequest(cfg.OrganizationID, repoRef, localID, client.ReviewChangeRequestInput{
+		ReviewOpinion: opinion,
+	}); err != nil {
+		return err
+	}
+
+	action := "通过"
+	if prReviewReject {
+		action = "拒绝"
+	}
+	fmt.Printf("已评审合并请求 #%d: %s\n", localID, action)
+	return nil
+}
+
+func runPRComment(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(prCommentBody) == "" {
+		return fmt.Errorf("请通过 --body 指定评论内容")
+	}
+
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("合并请求编号必须是整数: %s", args[0])
+	}
+
+	if err := c.CommentChangeRequest(cfg.OrganizationID, repoRef, localID, client.CommentChangeRequestInput{
+		Content: strings.TrimSpace(prCommentBody),
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("已添加评论到合并请求 #%d\n", localID)
+	return nil
+}
+
+func runPREdit(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(prEditTitle) == "" && strings.TrimSpace(prEditBody) == "" {
+		return fmt.Errorf("请至少指定 --title 或 --body")
+	}
+
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := resolvePRNumber(c, cfg, prRepo, args)
+	if err != nil {
+		return err
+	}
+
+	input := client.UpdateChangeRequestInput{}
+	if strings.TrimSpace(prEditTitle) != "" {
+		input.Title = strings.TrimSpace(prEditTitle)
+	}
+	if strings.TrimSpace(prEditBody) != "" {
+		input.Description = strings.TrimSpace(prEditBody)
+	}
+
+	pr, err := c.UpdateChangeRequest(cfg.OrganizationID, repoRef, localID, input)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("已更新合并请求 #%d\n", localID)
+	if pr != nil {
+		fmt.Printf("标题: %s\n", pr.Title)
+	}
+	return nil
+}
+
+func runPRReady(cmd *cobra.Command, args []string) error {
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := resolvePRNumber(c, cfg, prRepo, args)
+	if err != nil {
+		return err
+	}
+
+	wip := false
+	if _, err := c.UpdateChangeRequest(cfg.OrganizationID, repoRef, localID, client.UpdateChangeRequestInput{
+		WorkInProgress: &wip,
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("合并请求 #%d 已标记为就绪。\n", localID)
+	return nil
+}
+
+func runPRReopen(cmd *cobra.Command, args []string) error {
+	c, cfg, err := loadClientFromConfig()
+	if err != nil {
+		return err
+	}
+
+	repoRef, err := resolveRepoRef(cfg, prRepo)
+	if err != nil {
+		return err
+	}
+
+	localID, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("合并请求编号必须是整数: %s", args[0])
+	}
+
+	if err := c.ReopenChangeRequest(cfg.OrganizationID, repoRef, localID); err != nil {
+		return err
+	}
+
+	fmt.Printf("已重新打开合并请求 #%d\n", localID)
+	return nil
+}
+
+func resolvePRNumber(c *client.Client, cfg *config.Config, repoArg string, args []string) (int, error) {
+	if len(args) > 0 {
+		localID, err := strconv.Atoi(args[0])
+		if err != nil {
+			return 0, fmt.Errorf("合并请求编号必须是整数: %s", args[0])
+		}
+		return localID, nil
+	}
+
+	branch, err := currentGitBranch()
+	if err != nil {
+		return 0, fmt.Errorf("未指定合并请求编号，且无法获取当前 git 分支: %w", err)
+	}
+
+	_, projectID, err := resolveRepoProjectID(c, cfg, repoArg)
+	if err != nil {
+		return 0, err
+	}
+
+	prs, err := c.ListChangeRequests(cfg.OrganizationID, client.ListChangeRequestsOptions{
+		Page:      1,
+		PerPage:   100,
+		ProjectID: projectID,
+		State:     "opened",
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	for _, pr := range prs {
+		if pr.SourceBranch == branch {
+			return pr.LocalID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("未指定合并请求编号，且当前分支 %q 没有关联的打开中合并请求", branch)
 }
 
 func currentGitBranch() (string, error) {
