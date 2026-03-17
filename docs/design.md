@@ -208,7 +208,54 @@ cuctl [--config PATH] [--debug] <command> [args]
 
 ---
 
-## 9. 参考
+## 9. 多平台支持调研
+
+### 9.1 主流代码托管平台 CLI 生态
+
+| 平台 | 官方/社区 CLI | 状态 | 仓库 |
+|------|--------------|------|------|
+| **GitHub** | `gh` (GitHub CLI) | 官方维护 | https://github.com/cli/cli |
+| GitHub | `hub` | 已归档 (2020) | https://github.com/github/hub |
+| **GitLab** | `glab` | 官方维护 | https://github.com/profclems/glab |
+| **Bitbucket** | `bitbucket-cli` | Atlassian 官方 | https://github.com/atlassian/bitbucket-cli |
+| **Gitee** | `gtea` | 社区项目，更新不活跃 | https://github.com/lunny/gtea |
+| **Gitea** | `gitea-cli` | 社区项目 | https://gitea.com/gitea/cli |
+| **Forgejo** | `forgejo` | 社区项目 | https://codeberg.org/forgejo/forgejo |
+| 腾讯云 Coding.net | — | 无知名 CLI | — |
+| 华为云 CodeArts | 集成在 DevCloud CLI | 官方 | — |
+| 阿里云 Codeup | `cuctl` (本项目) | — | — |
+
+### 9.2 多平台统一 CLI 的可行性分析
+
+**潜在价值：**
+- 统一 CLI 体验，用户不用记忆不同平台的 API 和工具
+- 企业迁移场景（Codeup → GitLab）时脚本不用重写
+- 多平台镜像仓库管理
+- 学习成本低，熟悉 `cuctl` 后可操作其他平台
+
+**现实挑战：**
+- 用户群体重叠度低：用 Codeup 的企业通常不会同时用 GitLab/GitHub
+- 功能差异大：各平台 API 设计、权限模型、webhook 机制差异显著
+- 维护成本指数级增长：每个平台的 API 都在变，测试矩阵爆炸
+- 已有成熟替代：`gh`、`glab`、`hub` 等官方/社区 CLI 已经很成熟
+
+**架构建议（如未来需支持）：**
+```
+cuctl
+├── core/           # 通用命令解析、输出格式
+├── adapter/
+│   ├── codeup/     # 当前代码
+│   ├── gitlab/
+│   ├── github/
+│   └── gitee/
+└── cmd/            # 命令入口，路由到对应 adapter
+```
+
+**结论：** 当前聚焦 Codeup 做深做透，成为"Codeup 官方 CLI 替代品"。如未来有明确需求，可通过 adapter 架构扩展，社区贡献其他平台支持。
+
+---
+
+## 10. 参考
 
 - 云效 Codeup OpenAPI：阿里云 OpenAPI 门户 codeup 2020-04-14。
 - 个人访问令牌：云效帮助中心「个人访问令牌」「如何使用个人访问令牌调用 API」。
